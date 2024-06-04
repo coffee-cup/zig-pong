@@ -1,6 +1,6 @@
 # zig-pong
 
-Little game of pong written in Zig with Raylib.
+Little game of pong using Zig and Raylib.
 
 https://github.com/coffee-cup/zig-pong/assets/3044853/2289e4ac-2a4c-4006-a898-73833966bb29
 
