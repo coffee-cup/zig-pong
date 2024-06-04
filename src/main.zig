@@ -9,7 +9,9 @@ const ball_radius = 10;
 const paddle_x = 20;
 const paddle_width = 10;
 const paddle_height = 100;
-const paddle_speed = 8;
+
+const player_speed = 12;
+const ai_speed = 8;
 
 const starting_ball_vel_range = rl.Vector2.init(2, 5);
 const max_vel = 20.0;
@@ -50,6 +52,18 @@ const Ball = struct {
         if (self.vel.y > max_vel) {
             self.vel.y = max_vel;
         }
+
+        // Bounce the ball of the walls
+        const width: f32 = @floatFromInt(rl.getScreenWidth());
+        const height: f32 = @floatFromInt(rl.getScreenHeight());
+        if (self.pos.x - ball_radius <= padding or self.pos.x + ball_radius >= width - padding) {
+            self.vel.x *= -1 * multiplier;
+            self.vel.y *= multiplier;
+        }
+        if (self.pos.y - ball_radius <= padding or self.pos.y + ball_radius >= height - padding) {
+            self.vel.y *= -1 * multiplier;
+            self.vel.x *= multiplier;
+        }
     }
 
     fn draw(self: Ball) void {
@@ -65,12 +79,44 @@ const Ball = struct {
 const Paddle = struct {
     pos: rl.Vector2,
     vel: rl.Vector2,
+    is_ai: bool = true,
 
-    fn init(x: f32) @This() {
+    fn init(x: f32, is_ai: bool) @This() {
         return .{
             .pos = rl.Vector2.init(x, screen_height / 2 - paddle_height / 2 + padding),
             .vel = rl.Vector2.init(0.0, 0.0),
+            .is_ai = is_ai,
         };
+    }
+
+    fn update(self: *Paddle, ball: Ball) void {
+        if (self.is_ai) {
+            self.move_to_ball(ball);
+        } else {
+            if (rl.isKeyDown(rl.KeyboardKey.key_down)) {
+                self.pos.y += player_speed;
+            }
+            if (rl.isKeyDown(rl.KeyboardKey.key_up)) {
+                self.pos.y -= player_speed;
+            }
+        }
+
+        self.pos.y += self.vel.y;
+
+        if (self.pos.y < padding) {
+            self.pos.y = padding;
+        } else if (self.pos.y + paddle_height > screen_height - padding) {
+            self.pos.y = screen_height - padding - paddle_height;
+        }
+    }
+
+    fn move_to_ball(self: *Paddle, ball: Ball) void {
+        const mid_y = self.pos.y + paddle_height / 2;
+        const target_y = ball.pos.y + ball_radius;
+        const difference = target_y - mid_y;
+
+        const smoothing = 0.1;
+        self.vel.y = std.math.clamp(difference * smoothing * ai_speed, -ai_speed, ai_speed);
     }
 
     fn draw(self: Paddle) void {
@@ -103,23 +149,28 @@ const Score = struct {
     }
 };
 
+const LastScore = enum { Player, Ai };
+
 const World = struct {
     width: i32 = screen_width,
     height: i32 = screen_height,
     rng: std.Random,
 
     ball: Ball,
-    player_paddle: Paddle,
-    ai_paddle: Paddle,
+    left_paddle: Paddle,
+    right_paddle: Paddle,
     score: Score = Score.init(),
 
     playing_area: rl.Rectangle,
 
+    last_scored: ?LastScore = null,
+    flast_timer: f32 = 0.0,
+
     fn init(rng: std.Random) @This() {
         return .{
             .ball = Ball.init(rng),
-            .player_paddle = Paddle.init(paddle_x + padding),
-            .ai_paddle = Paddle.init(screen_width - padding - paddle_width - paddle_x),
+            .left_paddle = Paddle.init(paddle_x + padding, false),
+            .right_paddle = Paddle.init(screen_width - padding - paddle_width - paddle_x, true),
             .playing_area = rl.Rectangle.init(padding, padding, screen_width - padding * 2, screen_height - padding * 2),
             .rng = rng,
         };
@@ -128,23 +179,37 @@ const World = struct {
     fn update(self: *World) void {
         self.ball.update();
 
-        if (rl.isKeyDown(rl.KeyboardKey.key_down)) {
-            self.player_paddle.pos.y += paddle_speed;
-        }
-        if (rl.isKeyDown(rl.KeyboardKey.key_up)) {
-            self.player_paddle.pos.y -= paddle_speed;
-        }
+        self.left_paddle.update(self.ball);
+        self.right_paddle.update(self.ball);
 
-        // bounce the ball of the walls
-        if (self.ball.pos.x - ball_radius <= padding or self.ball.pos.x + ball_radius >= screen_width - padding) {
+        self.flast_timer -= 1.0;
+
+        // Check if the ball hits the paddles
+        const player_hit = rl.checkCollisionCircleRec(self.ball.pos, ball_radius, rl.Rectangle.init(
+            self.left_paddle.pos.x,
+            self.left_paddle.pos.y,
+            paddle_width,
+            paddle_height,
+        ));
+
+        if (player_hit) {
             self.ball.vel.x *= -1 * multiplier;
             self.ball.vel.y *= multiplier;
         }
-        if (self.ball.pos.y - ball_radius <= padding or self.ball.pos.y + ball_radius >= screen_height - padding) {
-            self.ball.vel.y *= -1 * multiplier;
-            self.ball.vel.x *= multiplier;
+
+        const ai_hit = rl.checkCollisionCircleRec(self.ball.pos, ball_radius, rl.Rectangle.init(
+            self.right_paddle.pos.x,
+            self.right_paddle.pos.y,
+            paddle_width,
+            paddle_height,
+        ));
+
+        if (ai_hit) {
+            self.ball.vel.x *= -1 * multiplier;
+            self.ball.vel.y *= multiplier;
         }
 
+        // Check if the ball hits the walls behind the paddles
         const player_lost = rl.checkCollisionCircleRec(self.ball.pos, ball_radius, rl.Rectangle.init(
             0,
             -1000,
@@ -159,29 +224,38 @@ const World = struct {
             screen_height + 1000,
         ));
 
+        // Update scores and reset game if a player lost
         if (player_lost) {
             self.score.ai += 1;
+            self.last_scored = .Ai;
         } else if (ai_lost) {
             self.score.player += 1;
+            self.last_scored = .Player;
         }
 
         if (player_lost or ai_lost) {
+            self.flast_timer = 30 * 0.5;
             self.reset();
         }
     }
 
     fn reset(self: *World) void {
         self.ball = Ball.init(self.rng);
-        self.player_paddle = Paddle.init(paddle_x + padding);
-        self.ai_paddle = Paddle.init(screen_width - padding - paddle_width - paddle_x);
+        self.left_paddle = Paddle.init(paddle_x + padding, false);
+        self.right_paddle = Paddle.init(screen_width - padding - paddle_width - paddle_x, true);
     }
 
     fn draw(self: World) void {
-        rl.drawRectangleRoundedLinesEx(self.playing_area, 0.01, 1, 2, rl.Color.white);
+        var border_color = rl.Color.ray_white;
+        if (self.flast_timer > 0) {
+            border_color = if (self.last_scored == .Player) rl.Color.green else rl.Color.red;
+        }
+
+        rl.drawRectangleRoundedLinesEx(self.playing_area, 0.01, 1, 2, border_color);
 
         self.ball.draw();
-        self.player_paddle.draw();
-        self.ai_paddle.draw();
+        self.left_paddle.draw();
+        self.right_paddle.draw();
 
         self.score.draw();
     }
@@ -214,7 +288,6 @@ pub fn main() !void {
 
         rl.beginDrawing();
         rl.clearBackground(rl.Color.black);
-        // rl.drawText("Hello, world!", 10, 10, 20, rl.Color.pink);
 
         world.draw();
 
