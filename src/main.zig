@@ -66,13 +66,42 @@ const Ball = struct {
         }
     }
 
+    fn handle_paddle_collision(self: *Ball, paddle: Paddle) void {
+        const paddle_center_y = paddle.pos.y + paddle_height / 2;
+        const paddle_relative_intersect_y = (paddle_center_y - self.pos.y) / (paddle_height / 2);
+        const max_angle = 35.0;
+        const bounce_angle = paddle_relative_intersect_y * max_angle;
+
+        const ball_speed = vectorLength(self.vel);
+
+        // Update the ball's velocity based on the bounce angle
+        self.vel.x = ball_speed * std.math.cos(std.math.rad_per_deg * bounce_angle) * if (self.vel.x > 0) @as(f32, -1) else 1;
+        self.vel.y = ball_speed * -std.math.sin(std.math.rad_per_deg * bounce_angle);
+
+        // Increase the speed slightly on each hit
+        const speed_increase = 1.05;
+        self.vel.x += speed_increase;
+        self.vel.y += speed_increase;
+
+        // Spin
+        self.vel.y += paddle.vel.y * 0.5;
+
+        // Make sure that the ball doesn't get stuck in the paddle
+        if (self.vel.x > 0) {
+            self.pos.x = paddle.pos.x + paddle_width + ball_radius;
+        } else {
+            self.pos.x = paddle.pos.x - ball_radius;
+        }
+    }
+
     fn draw(self: Ball) void {
-        rl.drawRectangleRoundedLinesEx(rl.Rectangle.init(
-            self.pos.x - ball_radius,
-            self.pos.y - ball_radius,
-            ball_radius * 2,
-            ball_radius * 2,
-        ), ball_radius, 4, 4, rl.Color.pink);
+        rl.drawCircle(@intFromFloat(self.pos.x), @intFromFloat((self.pos.y)), ball_radius, rl.Color.pink);
+        // rl.drawRectangleRoundedLinesEx(rl.Rectangle.init(
+        //     self.pos.x - ball_radius,
+        //     self.pos.y - ball_radius,
+        //     ball_radius * 2,
+        //     ball_radius * 2,
+        // ), ball_radius * 2, 100, 4, rl.Color.pink);
     }
 };
 
@@ -93,10 +122,10 @@ const Paddle = struct {
         if (self.is_ai) {
             self.move_to_ball(ball);
         } else {
-            if (rl.isKeyDown(rl.KeyboardKey.key_down)) {
+            if (rl.isKeyDown(rl.KeyboardKey.key_down) or rl.isKeyDown(rl.KeyboardKey.key_s)) {
                 self.pos.y += player_speed;
             }
-            if (rl.isKeyDown(rl.KeyboardKey.key_up)) {
+            if (rl.isKeyDown(rl.KeyboardKey.key_up) or rl.isKeyDown(rl.KeyboardKey.key_w)) {
                 self.pos.y -= player_speed;
             }
         }
@@ -177,6 +206,12 @@ const World = struct {
     }
 
     fn update(self: *World) void {
+        if (rl.isKeyPressed(rl.KeyboardKey.key_r)) {
+            self.score.player = 0;
+            self.score.ai = 0;
+            self.reset();
+        }
+
         self.ball.update();
 
         self.left_paddle.update(self.ball);
@@ -193,8 +228,7 @@ const World = struct {
         ));
 
         if (player_hit) {
-            self.ball.vel.x *= -1 * multiplier;
-            self.ball.vel.y *= multiplier;
+            self.ball.handle_paddle_collision(self.left_paddle);
         }
 
         const ai_hit = rl.checkCollisionCircleRec(self.ball.pos, ball_radius, rl.Rectangle.init(
@@ -205,8 +239,7 @@ const World = struct {
         ));
 
         if (ai_hit) {
-            self.ball.vel.x *= -1 * multiplier;
-            self.ball.vel.y *= multiplier;
+            self.ball.handle_paddle_collision(self.right_paddle);
         }
 
         // Check if the ball hits the walls behind the paddles
@@ -267,7 +300,7 @@ const tick_rate = 30.0; // 30 ticks per second
 pub fn main() !void {
     var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
 
-    rl.initWindow(screen_width, screen_height, "Hello Raylib");
+    rl.initWindow(screen_width, screen_height, "pong");
     defer rl.closeWindow();
 
     var world = World.init(rng.random());
@@ -306,6 +339,10 @@ fn randomVector2(rnd: std.Random, minX: f32, maxX: f32, minY: f32, maxY: f32) rl
         .x = randRangeFloat(rnd, minX, maxX),
         .y = randRangeFloat(rnd, minY, maxY),
     };
+}
+
+fn vectorLength(v: rl.Vector2) f32 {
+    return std.math.sqrt(v.x * v.x + v.y * v.y);
 }
 
 test "simple test" {
